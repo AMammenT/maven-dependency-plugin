@@ -22,6 +22,7 @@ package org.apache.maven.plugins.dependency;
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Field;
+import java.nio.file.Files;
 import java.util.List;
 
 import org.apache.maven.artifact.Artifact;
@@ -64,7 +65,7 @@ public abstract class AbstractDependencyMojo
      * will use the jvm chmod, this is available for user and all level group level will be ignored
      * </p>
      * <b>since 2.6 is on by default</b>
-     * 
+     *
      * @since 2.5.1
      */
     @Parameter( property = "dependency.useJvmChmod", defaultValue = "true" )
@@ -72,7 +73,7 @@ public abstract class AbstractDependencyMojo
 
     /**
      * ignore to set file permissions when unpacking a dependency
-     * 
+     *
      * @since 2.7
      */
     @Parameter( property = "dependency.ignorePermissions", defaultValue = "false" )
@@ -132,6 +133,23 @@ public abstract class AbstractDependencyMojo
     @Parameter( property = "mdep.skip", defaultValue = "false" )
     private boolean skip;
 
+    /**
+     * Hardlinks are supported:
+     * 1. On some platforms and filesystems
+     * 2. Within the same filesystem
+     *
+     * If the configurer is confident that the platform and filesystem does
+     * support hardlinks, and that the source and destination are on the same
+     * filesystem, then, if set to true, hardlinking will be attempted.  This
+     * should greatly reduce time required for copying files.   If hardlinks
+     * cannot be created for any reason, files will still be copied, but the
+     * initial attempt to hardlink will incur some additional time cost.
+     *
+     * @since 3.1.4
+     */
+    @Parameter( property = "useHardlinksIfSupported", defaultValue = "false" )
+    protected boolean useHardlinksIfSupported;
+
     // Mojo methods -----------------------------------------------------------
 
     /*
@@ -188,7 +206,36 @@ public abstract class AbstractDependencyMojo
                     + "copy should be executed after packaging: see MDEP-187." );
             }
 
-            FileUtils.copyFile( artifact, destFile );
+            if ( useHardlinksIfSupported )
+            {
+                getLog().info( " Attempting hardlinks rather than copy." );
+                try
+                {
+                    if ( !destFile.getParentFile().exists() )
+                    {
+                        // Creation of the parent directory structure needs to be handled
+                        // in order for any links to be created properly.
+                        destFile.getParentFile().mkdirs();
+                    }
+                    else if ( destFile.exists() )
+                    {
+                        // In the general copy case the original file is replaced with
+                        // the new copy.   In the case of creating a hardlink, the replace
+                        // is accomplished with a delete then create.
+                        destFile.delete();
+                    }
+                    Files.createLink( destFile.toPath(), artifact.toPath() );
+                }
+                catch ( Exception e )
+                {
+                    //Dispose of any exception and fallback to pre-existing standard file copy
+                    FileUtils.copyFile( artifact, destFile );
+                }
+            }
+            else
+            {
+                FileUtils.copyFile( artifact, destFile );
+            }
         }
         catch ( IOException e )
         {
